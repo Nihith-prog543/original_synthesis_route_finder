@@ -1,0 +1,475 @@
+# app.py - Main Flask Application
+from flask import Flask, render_template, request, jsonify, Response
+import os
+import sys
+from datetime import datetime
+import json
+import threading
+from queue import Queue
+import uuid
+import time
+import socket
+import pandas as pd
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Add the synthesis engine to path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'synthesis_engine'))
+
+from synthesis_engine.analysis import SynthesisAnalyzer
+from synthesis_engine.utils import initialize_session, get_session_data, update_session_data
+from synthesis_engine.api_buyer_finder import ApiBuyerFinder # Import the new API Buyer Finder
+
+app = Flask(__name__)
+app.secret_key = 'your-secret-key-here'  # Change this to a secure secret key
+
+# Global analyzer instance
+analyzer = None
+api_buyer_finder = None # Global instance for API Buyer Finder
+
+# Dictionary to store threading.Event objects for stopping analysis processes
+stop_events = {}
+# Dictionary to store queues for sending progress updates via SSE
+progress_queues = {}
+
+
+with app.app_context():
+    analyzer = SynthesisAnalyzer()
+    api_buyer_finder = ApiBuyerFinder() # Initialize ApiBuyerFinder
+
+@app.route('/')
+def index():
+    """Serve the main HTML interface"""
+    return render_template('index.html')
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze_synthesis():
+    """Main synthesis analysis endpoint"""
+    try:
+        data = request.get_json()
+        
+        # Extract parameters
+        api_name = data.get('api_name', '').strip()
+        supplier_pref = data.get('supplier_preference', '').strip()
+        search_depth = data.get('search_depth', 'deep')
+        include_alternatives = data.get('include_alternatives', True)
+        focus_high_yield = data.get('focus_high_yield', True)
+        viability_threshold = data.get('viability_threshold', 75)
+        
+        if not api_name:
+            return jsonify({'error': 'API name is required'}), 400
+        
+        # Initialize session for this analysis
+        session_id = initialize_session(api_name)
+        
+        # Create a stop event and a progress queue for this session
+        stop_events[session_id] = threading.Event()
+        progress_queues[session_id] = Queue()
+
+        # Define a progress callback function
+        def progress_callback(percentage, message):
+            if session_id in progress_queues:
+                progress_queues[session_id].put({'percentage': percentage, 'message': message})
+
+        # Run the analysis in a separate thread to allow progress updates and stopping
+        # The actual result will be stored in the session data when complete
+        def run_analysis_in_thread():
+            try:
+                result = analyzer.run_full_analysis(
+                    api_name=api_name,
+                    supplier_preference=supplier_pref,
+                    search_depth=search_depth,
+                    include_alternatives=include_alternatives,
+                    focus_high_yield=focus_high_yield,
+                    viability_threshold=viability_threshold,
+                    progress_callback=progress_callback,
+                    stop_event=stop_events[session_id]
+                )
+                update_session_data(session_id, {
+                    'analysis_complete': True,
+                    'results': result,
+                    'timestamp': datetime.now().isoformat()
+                })
+                progress_queues[session_id].put({'percentage': 100, 'message': 'Analysis complete!'})
+            except Exception as e:
+                print(f"Error in analysis thread for session {session_id}: {e}")
+                update_session_data(session_id, {
+                    'analysis_complete': True,
+                    'results': {'success': False, 'error': f'Analysis failed: {str(e)}'},
+                    'timestamp': datetime.now().isoformat()
+                })
+                progress_queues[session_id].put({'percentage': 0, 'message': f'Analysis failed: {str(e)}', 'error': True})
+            finally:
+                # Clean up the queue and event after analysis (or stop)
+                if session_id in progress_queues:
+                    progress_queues[session_id].put(None) # Sentinel to signal end of stream
+                if session_id in stop_events: # Ensure cleanup if analysis was stopped manually
+                    del stop_events[session_id]
+                if session_id in progress_queues:
+                    del progress_queues[session_id]
+
+        analysis_thread = threading.Thread(target=run_analysis_in_thread)
+        analysis_thread.start()
+        
+        # Return session_id immediately, frontend will poll for progress
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'message': 'Analysis started in background.'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/progress/<session_id>')
+def progress_stream(session_id):
+    def generate():
+        if session_id not in progress_queues:
+            yield f"data: {json.dumps({'percentage': 0, 'message': 'Invalid session or analysis not started.'})}\n\n"
+            return
+
+        queue = progress_queues[session_id]
+        while True:
+            item = queue.get()
+            if item is None: # Sentinel value for end of stream
+                break
+            yield f"data: {json.dumps(item)}\n\n"
+
+        # Clean up queue after stream ends
+        if session_id in progress_queues: # Check again, might have been cleaned by analysis thread
+            del progress_queues[session_id]
+
+    return app.response_class(generate(), mimetype='text/event-stream')
+
+@app.route('/api/stop_analysis', methods=['POST'])
+def stop_analysis_endpoint():
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+
+        if not session_id:
+            return jsonify({'error': 'Session ID is required'}), 400
+
+        if session_id in stop_events:
+            stop_events[session_id].set()  # Signal the thread to stop
+            return jsonify({'success': True, 'message': f'Stop signal sent for session {session_id}'})
+        else:
+            return jsonify({'success': False, 'message': 'No active analysis for this session'}), 404
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """Chatbot endpoint for follow-up questions"""
+    try:
+        data = request.get_json()
+        
+        session_id = data.get('session_id')
+        message = data.get('message', '').strip()
+        
+        if not session_id or not message:
+            return jsonify({'error': 'Session ID and message are required'}), 400
+        
+        # Get session data
+        session_data = get_session_data(session_id)
+        if not session_data:
+            return jsonify({'error': 'Invalid session'}), 400
+        
+        # Generate chatbot response
+        response = analyzer.chat_response(message, session_data)
+        
+        return jsonify({
+            'success': True,
+            'response': response
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/session/<session_id>')
+def get_session(session_id):
+    """Get session data"""
+    try:
+        session_data = get_session_data(session_id)
+        if not session_data:
+            return jsonify({'error': 'Session not found'}), 404
+        
+        # Add this debug print to inspect the session data before sending to frontend
+        print(f"[DEBUG] Session data for {session_id}: {json.dumps(session_data, indent=2)}")
+        
+        return jsonify({
+            'success': True,
+            'data': session_data
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/predict_route', methods=['POST'])
+def predict_route():
+    data = request.json
+    api_name = data.get('api_name')
+    country_preference = data.get('country_preference', '')
+    criteria = data.get('criteria', '')
+    existing_session_id = data.get('session_id') # Get session_id from frontend if it exists
+
+    if not api_name:
+        return jsonify({'error': 'API name is required.'}), 400
+
+    try:
+        session_id = existing_session_id if existing_session_id else str(uuid.uuid4())
+
+        # Initialize session data if it's a new session or if it's missing for an existing ID
+        if session_id not in progress_queues: # Use progress_queues to check if session exists
+            initialize_session(api_name, session_id) # Ensure initialize_session accepts session_id
+        
+        stop_event = threading.Event()
+        progress_queue = Queue()
+        stop_events[session_id] = stop_event
+        progress_queues[session_id] = progress_queue
+
+        analyzer = SynthesisAnalyzer()
+
+        def prediction_task():
+            try:
+                def progress_callback(progress, message):
+                    if session_id in progress_queues:
+                        progress_queues[session_id].put({'status': 'progress', 'progress': progress, 'message': message})
+                
+                result = analyzer.predict_synthesis_route(
+                    api_name, 
+                    country_preference, 
+                    criteria, 
+                    progress_callback,
+                    stop_event
+                )
+                print(f"[DEBUG] AI prediction raw result for session {session_id}:\n{result}") # Log the raw result
+                # Store the predicted route in the session data
+                update_session_data(session_id, {
+                    'ai_predicted_route': result.get('result', 'No predicted route found.'),
+                    'prediction_complete': True
+                })
+                if session_id in progress_queues:
+                    progress_queues[session_id].put({'status': 'complete', 'result': result})
+            except Exception as e:
+                print(f"Prediction error for session {session_id}: {e}")
+                if session_id in progress_queues:
+                    progress_queues[session_id].put({'status': 'error', 'message': str(e)})
+            finally:
+                # Clean up the queue and event after prediction (or stop)
+                if session_id in progress_queues:
+                    progress_queues[session_id].put(None) # Sentinel to signal end of stream
+                if session_id in stop_events: # Ensure cleanup if prediction was stopped manually
+                    del stop_events[session_id]
+                if session_id in progress_queues:
+                    del progress_queues[session_id]
+
+        thread = threading.Thread(target=prediction_task)
+        thread.start()
+
+        return jsonify({'session_id': session_id})
+
+    except Exception as e:
+        print(f"[DEBUG] Error in predict_route endpoint: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/prediction_progress/<session_id>')
+def prediction_progress(session_id):
+    def generate():
+        if session_id not in progress_queues:
+            yield f"data: {json.dumps({'status': 'error', 'message': 'Invalid session ID'})}\n\n"
+            return
+
+        queue = progress_queues[session_id]
+        while True:
+            try:
+                item = queue.get()
+                if item is None: # Sentinel value for end of stream
+                    print(f"[DEBUG] SSE for session {session_id}: Received sentinel, breaking stream.")
+                    break
+                
+                print(f"[DEBUG] SSE for session {session_id}: Raw item from queue: {item}")
+                json_data = json.dumps(item)
+                print(f"[DEBUG] SSE for session {session_id}: Yielding JSON: {json_data}")
+                yield f"data: {json_data}\n\n"
+                
+                if item.get('status') in ['complete', 'error']:
+                    print(f"[DEBUG] SSE for session {session_id}: Status is {item.get('status')}, breaking stream.")
+                    break
+            except Exception as e:
+                print(f"Error generating prediction progress for session {session_id}: {e}")
+                yield f"data: {json.dumps({'status': 'error', 'message': f'Stream error: {str(e)}'})}\n\n"
+                break
+
+    return Response(generate(), mimetype='text/event-stream')
+
+@app.route('/api/visualize_reaction', methods=['POST'])
+def visualize_reaction():
+    try:
+        data = request.get_json()
+        reaction_smiles = data.get('reaction_smiles')
+        if not reaction_smiles:
+            return jsonify({'error': 'Reaction SMILES is required.'}), 400
+
+        # Use the global analyzer instance
+        if analyzer is None:
+            return jsonify({'error': 'SynthesisAnalyzer not initialized.'}), 500
+
+        base64_image = analyzer._generate_reaction_image(reaction_smiles)
+
+        if base64_image:
+            return jsonify({'success': True, 'image': base64_image}), 200
+        else:
+            return jsonify({'success': False, 'error': 'Failed to generate reaction image.'}), 500
+
+    except Exception as e:
+        print(f"[DEBUG] Error in visualize_reaction endpoint: {e}")
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+@app.route('/api/stop_prediction', methods=['POST'])
+def stop_prediction():
+    data = request.json
+    session_id = data.get('session_id') 
+
+    if session_id and session_id in stop_events:
+        stop_events[session_id].set()
+        return jsonify({'message': f'Prediction for session {session_id} stopping.'}), 200
+    return jsonify({'error': 'No active prediction found for this session.'}), 404
+
+@app.route('/api/find_buyers', methods=['POST'])
+def find_buyers():
+    """Endpoint to find potential API buyers for a given API name."""
+    try:
+        data = request.get_json()
+        api_name = data.get('api_name')
+        country = data.get('country') # Extract country from request
+
+        if not api_name or not country: # Both are now required
+            return jsonify({'error': 'API name and country are required'}), 400
+
+        if api_buyer_finder is None:
+            return jsonify({'error': 'ApiBuyerFinder not initialized.'}), 500
+
+        results = api_buyer_finder.find_api_buyers(api_name, country) # Pass both api_name and country
+        return jsonify(results) # Return the full results dictionary directly
+    except Exception as e:
+        print(f"[DEBUG] Error in find_buyers endpoint: {e}")
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+@app.route('/api/load_manufacturers', methods=['GET'])
+def load_manufacturers():
+    """Endpoint to load API manufacturers data from Excel file."""
+    try:
+        # Look for Excel file in the project root directory and parent directory
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.dirname(project_root)  # DOM folder
+        
+        # Try different file names and extensions in both locations
+        possible_files = [
+            # Check parent directory (DOM folder) first - user's file location
+            os.path.join(parent_dir, 'API_Manufacturers_List.csv'),  # User's file with capitals
+            os.path.join(parent_dir, 'api_manufacturers_list.csv'),
+            os.path.join(parent_dir, 'api_manufacturers.xlsx'),
+            os.path.join(parent_dir, 'api_manufacturers.xls'),
+            os.path.join(parent_dir, 'api_manufacturers.csv'),
+            # Check project root directory
+            os.path.join(project_root, 'API_Manufacturers_List.csv'),  # With capitals
+            os.path.join(project_root, 'api_manufacturers_list.csv'),
+            os.path.join(project_root, 'api_manufacturers.xlsx'),
+            os.path.join(project_root, 'api_manufacturers.xls'),
+            os.path.join(project_root, 'api_manufacturers.csv'),
+            os.path.join(project_root, 'manufacturers.xlsx'),
+            os.path.join(project_root, 'manufacturers.xls'),
+            os.path.join(project_root, 'manufacturers.csv'),
+        ]
+        
+        excel_file = None
+        for file_path in possible_files:
+            if os.path.exists(file_path):
+                excel_file = file_path
+                break
+        
+        if not excel_file:
+            return jsonify({
+                'success': False,
+                'error': f'Excel file not found. Please place your Excel file in either:\n1. DOM folder: {parent_dir}\n2. Project folder: {project_root}\n\nSupported names: API_Manufacturers_List.csv, api_manufacturers_list.csv, api_manufacturers.xlsx, api_manufacturers.xls, api_manufacturers.csv, manufacturers.xlsx, manufacturers.xls, or manufacturers.csv'
+            }), 404
+        
+        # Read the Excel file
+        try:
+            if excel_file.endswith('.csv'):
+                df = pd.read_csv(excel_file)
+            else:
+                df = pd.read_excel(excel_file)
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Error reading Excel file: {str(e)}'
+            }), 500
+        
+        if df.empty:
+            return jsonify({
+                'success': False,
+                'error': 'Excel file is empty or could not be read.'
+            }), 400
+        
+        # Convert DataFrame to dictionary format for JSON response
+        # Replace NaN values with empty strings
+        df = df.fillna('')
+        
+        # Get column names
+        columns = df.columns.tolist()
+        
+        # Convert to list of dictionaries
+        data = df.to_dict(orient='records')
+        
+        return jsonify({
+            'success': True,
+            'data': data,
+            'columns': columns,
+            'row_count': len(data),
+            'file_path': excel_file
+        })
+        
+    except Exception as e:
+        print(f"[DEBUG] Error in load_manufacturers endpoint: {e}")
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+
+if __name__ == '__main__':
+    # Create necessary directories
+    os.makedirs('static/css', exist_ok=True)
+    os.makedirs('static/js', exist_ok=True)
+    os.makedirs('static/images', exist_ok=True)
+    os.makedirs('templates', exist_ok=True)
+    os.makedirs('synthesis_engine', exist_ok=True)
+    
+    # Initialize analyzer
+    with app.app_context():
+        analyzer = SynthesisAnalyzer()
+    
+    # Determine LAN IP for convenience logging
+    def get_local_ip():
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(('8.8.8.8', 80))
+                return s.getsockname()[0]
+        except Exception:
+            return '127.0.0.1'
+
+    # Use PORT from environment (for cloud platforms) or default to 5000
+    # Replit uses port 8080, Render uses PORT env var
+    port = int(os.environ.get('PORT', 5000))
+    host = os.environ.get('HOST', '0.0.0.0')
+
+    local_ip = get_local_ip()
+    print(f"\nApp is starting...\n")
+    print(f"Local access:   http://127.0.0.1:{port}")
+    print(f"LAN access:     http://{local_ip}:{port}")
+    print("Note: Ensure your firewall allows inbound connections on this port.")
+
+    # Run the Flask app (bound to all interfaces for LAN access)
+    app.run(debug=False, host=host, port=port)
