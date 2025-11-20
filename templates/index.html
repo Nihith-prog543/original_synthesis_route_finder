@@ -523,7 +523,8 @@
         }
 
         /* API Manufacturers table styling - Same as API Buyers */
-        #apiManufacturersTableContainer table.results-table {
+        #localManufacturersTableContainer table.results-table,
+        #newManufacturersTableContainer table.results-table {
             width: 100%;
             border-collapse: collapse;
             margin: 25px 0;
@@ -535,14 +536,17 @@
             border: 2px solid #004d40; /* Stronger border for the table itself */
         }
 
-        #apiManufacturersTableContainer table.results-table th,
-        #apiManufacturersTableContainer table.results-table td {
+        #localManufacturersTableContainer table.results-table th,
+        #localManufacturersTableContainer table.results-table td,
+        #newManufacturersTableContainer table.results-table th,
+        #newManufacturersTableContainer table.results-table td {
             border: 2px solid #004d40; /* Individual cell borders - prominent and consistent */
             padding: 14px 18px;
             vertical-align: top;
         }
 
-        #apiManufacturersTableContainer table.results-table th {
+        #localManufacturersTableContainer table.results-table th,
+        #newManufacturersTableContainer table.results-table th {
             background-color: #00796b;
             color: #ffffff;
             font-weight: 600;
@@ -552,12 +556,40 @@
             white-space: nowrap; /* Prevent header text from wrapping */
         }
 
-        #apiManufacturersTableContainer table.results-table tr:nth-child(even) {
+        #localManufacturersTableContainer table.results-table tr:nth-child(even),
+        #newManufacturersTableContainer table.results-table tr:nth-child(even) {
             background-color: #f5fcf5; /* Very light green for even rows */
         }
 
-        #apiManufacturersTableContainer table.results-table tr:hover {
+        #localManufacturersTableContainer table.results-table tr:hover,
+        #newManufacturersTableContainer table.results-table tr:hover {
             background-color: #e6f7e6; /* Slightly darker hover for readability */
+        }
+        .manufacturer-tab-buttons {
+            display: flex;
+            gap: 12px;
+            margin: 20px 0;
+        }
+        .manufacturer-tab-btn {
+            flex: 1;
+            border: none;
+            padding: 12px 16px;
+            background: #e0f2f1;
+            color: #004d40;
+            font-weight: 600;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        .manufacturer-tab-btn.active {
+            background: #00796b;
+            color: #fff;
+        }
+        .manufacturer-panel {
+            border: 1px solid #d1f2eb;
+            border-radius: 16px;
+            padding: 20px;
+            background: #f9fffe;
         }
     </style>
 </head>
@@ -794,21 +826,78 @@
                     <span class="tab-icon">🏭</span>
                     API Manufacturers
                 </h2>
-                <p class="description">View API manufacturer data from Excel file.</p>
-
-                <!-- Progress Section -->
-                <div id="manufacturersProgressSection" style="display: none;">
-                    <div class="progress-container">
-                        <div id="manufacturersProgressBar" class="progress-bar" style="width: 0%"></div>
-                    </div>
-                    <div id="manufacturersProgressText" style="text-align: center; margin-top: 10px; color: #00796b;"></div>
+                <p class="description">
+                    Browse the curated Excel-imported manufacturers or switch to the discovery tab to find and store brand new suppliers.
+                </p>
+                
+                <div class="manufacturer-tab-buttons">
+                    <button class="manufacturer-tab-btn active" data-target="localManufacturersPanel">
+                        Existing Manufacturers
+                    </button>
+                    <button class="manufacturer-tab-btn" data-target="newManufacturersPanel">
+                        New Manufacturers
+                    </button>
                 </div>
 
-                <!-- Results Section -->
-                <div id="apiManufacturersResults" class="results-section" style="margin-top: 25px;">
-                    <h3 class="results-title">API Manufacturers Data</h3>
-                    <div id="apiManufacturersTableContainer"></div>
-                    <div id="apiManufacturersInfo" class="info-box" style="display: none; margin-top: 20px;"></div>
+                <!-- Existing manufacturers panel -->
+                <div id="localManufacturersPanel" class="manufacturer-panel" style="display: block;">
+                    <div class="search-grid">
+                        <div class="search-section">
+                            <h3 class="search-title">API Name</h3>
+                            <input type="text" class="input-field" id="localApiManufacturerName" placeholder="e.g., Metformin">
+                            <small style="display: block; margin-top: 5px; color: #555;">Enter the active ingredient to filter manufacturers.</small>
+                        </div>
+                        <div class="search-section">
+                            <h3 class="search-title">Country</h3>
+                            <input type="text" class="input-field" id="localApiManufacturerCountry" placeholder="e.g., India">
+                            <small style="display: block; margin-top: 5px; color: #555;">Results will be constrained to this country (case-insensitive).</small>
+                        </div>
+                    </div>
+
+                    <button class="search-btn" onclick="loadLocalManufacturers()" id="loadLocalManufacturersBtn">
+                        📚 Load Manufacturers
+                    </button>
+
+                    <div id="localManufacturersResults" class="results-section" style="display: none; margin-top: 25px;">
+                        <h3 class="results-title">Local Database Records</h3>
+                        <div id="localManufacturersTableContainer"></div>
+                        <div id="localManufacturersInfo" class="info-box" style="display: none; margin-top: 20px;"></div>
+                    </div>
+                </div>
+
+                <!-- Discovery panel -->
+                <div id="newManufacturersPanel" class="manufacturer-panel" style="display: none;">
+                    <div class="search-grid">
+                        <div class="search-section">
+                            <h3 class="search-title">API Name</h3>
+                            <input type="text" class="input-field" id="newApiManufacturerName" placeholder="e.g., Metformin">
+                            <small style="display: block; margin-top: 5px; color: #555;">Enter the active ingredient for discovery.</small>
+                        </div>
+                        <div class="search-section">
+                            <h3 class="search-title">Country</h3>
+                            <input type="text" class="input-field" id="newApiManufacturerCountry" placeholder="e.g., India">
+                            <small style="display: block; margin-top: 5px; color: #555;">Focus discovery results on this country.</small>
+                        </div>
+                    </div>
+
+                    <button class="search-btn" onclick="discoverNewManufacturers()" id="discoverManufacturersBtn">
+                        ✨ Discover New Manufacturers
+                    </button>
+
+                    <!-- Progress Section -->
+                    <div id="newManufacturersProgressSection" style="display: none;">
+                        <div class="progress-container">
+                            <div id="newManufacturersProgressBar" class="progress-bar" style="width: 0%"></div>
+                        </div>
+                        <div id="newManufacturersProgressText" style="text-align: center; margin-top: 10px; color: #00796b;"></div>
+                    </div>
+
+                    <!-- Results Section -->
+                    <div id="newManufacturersResults" class="results-section" style="display: none; margin-top: 25px;">
+                        <h3 class="results-title">New Manufacturer Discoveries</h3>
+                        <div id="newManufacturersTableContainer"></div>
+                        <div id="newManufacturersInfo" class="info-box" style="display: none; margin-top: 20px;"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -841,9 +930,12 @@
                 console.log('Closed prediction SSE connection due to tab switch.');
             }
 
-            // Auto-load manufacturers data when API Manufacturers tab is clicked
             if (tabName === 'apiManufacturers') {
-                loadApiManufacturers();
+                resetNewManufacturersUI(true);
+                document.getElementById('localManufacturersResults').style.display = 'none';
+                document.getElementById('localManufacturersTableContainer').innerHTML = '';
+                document.getElementById('localManufacturersInfo').style.display = 'none';
+                document.getElementById('localManufacturersInfo').innerHTML = '';
             }
         }
 
@@ -1652,31 +1744,52 @@
             progressSection.style.display = 'none';
         }
 
-        // API Manufacturers functionality
-        async function loadApiManufacturers() {
-            const progressSection = document.getElementById('manufacturersProgressSection');
-            const progressBar = document.getElementById('manufacturersProgressBar');
-            const progressText = document.getElementById('manufacturersProgressText');
-            const resultsDiv = document.getElementById('apiManufacturersResults');
-            const tableContainer = document.getElementById('apiManufacturersTableContainer');
-            const infoBox = document.getElementById('apiManufacturersInfo');
+        document.addEventListener('DOMContentLoaded', () => {
+            setupManufacturerTabs();
+        });
 
-            // Reset UI and show loading
-            progressSection.style.display = 'block';
-            progressBar.style.width = '0%';
-            progressText.textContent = 'Loading Excel file...';
-            resultsDiv.style.display = 'block'; // Show results section immediately
-            tableContainer.innerHTML = '<p style="text-align: center; color: #666;">Loading data...</p>';
+        function setupManufacturerTabs() {
+            const buttons = document.querySelectorAll('.manufacturer-tab-btn');
+            const panels = document.querySelectorAll('.manufacturer-panel');
+            buttons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    buttons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const target = btn.getAttribute('data-target');
+                    panels.forEach(panel => {
+                        panel.style.display = panel.id === target ? 'block' : 'none';
+                    });
+                });
+            });
+        }
+
+        // Existing manufacturers (Excel-backed DB)
+        async function loadLocalManufacturers() {
+            const apiName = document.getElementById('localApiManufacturerName').value.trim();
+            const country = document.getElementById('localApiManufacturerCountry').value.trim();
+
+            if (!apiName || !country) {
+                alert('Please enter both API Name and Country.');
+                return;
+            }
+
+            const btn = document.getElementById('loadLocalManufacturersBtn');
+            const resultsDiv = document.getElementById('localManufacturersResults');
+            const tableContainer = document.getElementById('localManufacturersTableContainer');
+            const infoBox = document.getElementById('localManufacturersInfo');
+
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner"></div> Loading...';
+            resultsDiv.style.display = 'none';
+            tableContainer.innerHTML = '';
             infoBox.style.display = 'none';
             infoBox.innerHTML = '';
 
             try {
-                updateManufacturersProgress(30, 'Reading Excel file...');
-                const response = await fetch('/api/load_manufacturers', {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
+                const response = await fetch('/api/find_manufacturers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_name: apiName, country })
                 });
 
                 if (!response.ok) {
@@ -1685,87 +1798,199 @@
                 }
 
                 const data = await response.json();
-                
-                if (data.success) {
-                    updateManufacturersProgress(100, 'Data loaded successfully!');
-                    displayManufacturersData(data.data, data.columns);
-                } else {
-                    throw new Error(data.error || 'Failed to load manufacturers data.');
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to load manufacturers.');
                 }
-                
-            } catch (error) {
-                console.error('Load manufacturers error:', error);
+
+                renderLocalManufacturers(data.records || []);
                 infoBox.style.display = 'block';
-                infoBox.className = 'info-box';
-                infoBox.style.borderLeftColor = '#f44336';
-                infoBox.style.backgroundColor = '#ffebee';
+                infoBox.innerHTML = `<p><strong>Total matches:</strong> ${(data.records || []).length}</p>`;
+            } catch (error) {
+                console.error('Local manufacturers error:', error);
+                infoBox.style.display = 'block';
                 infoBox.innerHTML = `<p><strong>Error:</strong> ${error.message}</p>`;
-                updateManufacturersProgress(0, 'Load failed.');
             } finally {
-                resetManufacturersUI();
+                btn.disabled = false;
+                btn.innerHTML = '📚 Load Manufacturers';
             }
         }
 
-        function updateManufacturersProgress(percent, text) {
-            document.getElementById('manufacturersProgressBar').style.width = percent + '%';
-            document.getElementById('manufacturersProgressText').textContent = text;
-        }
-
-        function displayManufacturersData(data, columns) {
-            const resultsDiv = document.getElementById('apiManufacturersResults');
-            const tableContainer = document.getElementById('apiManufacturersTableContainer');
-            const infoBox = document.getElementById('apiManufacturersInfo');
-            
+        function renderLocalManufacturers(data) {
+            const resultsDiv = document.getElementById('localManufacturersResults');
+            const tableContainer = document.getElementById('localManufacturersTableContainer');
             resultsDiv.style.display = 'block';
-            tableContainer.innerHTML = '';
 
             if (!data || data.length === 0) {
-                infoBox.style.display = 'block';
-                infoBox.className = 'info-box';
-                infoBox.style.borderLeftColor = '#ff9800';
-                infoBox.style.backgroundColor = '#fff3e0';
-                infoBox.innerHTML = '<p>No data found in the Excel file.</p>';
+                tableContainer.innerHTML = '<p class="info-box">No manufacturers found in the local database for this query.</p>';
                 return;
             }
 
-            // Create table with same styling as API Buyers
-            let tableHtml = '<table class="results-table">';
-            
-            // Table Headers
-            tableHtml += '<thead><tr>';
-            columns.forEach(col => {
-                tableHtml += `<th>${col}</th>`;
-            });
-            tableHtml += '</tr></thead>';
+            tableContainer.innerHTML = createManufacturerTableHtml(data);
+        }
 
-            // Table Body
-            tableHtml += '<tbody>';
+        // New manufacturer discovery
+        async function discoverNewManufacturers() {
+            const apiName = document.getElementById('newApiManufacturerName').value.trim();
+            const country = document.getElementById('newApiManufacturerCountry').value.trim();
+
+            if (!apiName || !country) {
+                alert('Please enter both API Name and Country.');
+                return;
+            }
+
+            const progressSection = document.getElementById('newManufacturersProgressSection');
+            const progressBar = document.getElementById('newManufacturersProgressBar');
+            const progressText = document.getElementById('newManufacturersProgressText');
+            const resultsDiv = document.getElementById('newManufacturersResults');
+            const tableContainer = document.getElementById('newManufacturersTableContainer');
+            const infoBox = document.getElementById('newManufacturersInfo');
+            const searchBtn = document.getElementById('discoverManufacturersBtn');
+
+            resetNewManufacturersUI(false);
+            progressSection.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Searching trusted sources...';
+            resultsDiv.style.display = 'none';
+            tableContainer.innerHTML = '<p style="text-align: center; color: #666;">Analyzing results...</p>';
+            infoBox.style.display = 'none';
+            infoBox.innerHTML = '';
+            searchBtn.disabled = true;
+            searchBtn.innerHTML = '<div class="spinner"></div> Discovering...';
+
+            try {
+                updateNewManufacturersProgress(30, 'Querying Google Custom Search...');
+                const response = await fetch('/api/discover_manufacturers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_name: apiName, country })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Discovery failed.');
+                }
+
+                updateNewManufacturersProgress(80, 'Rendering discoveries...');
+                renderNewManufacturersResults(
+                    data.existing_records || [],
+                    data.new_records || []
+                );
+
+                let metaHtml = '';
+                metaHtml += `<p><strong>New manufacturers added:</strong> ${data.inserted_count || 0}</p>`;
+                metaHtml += `<p><strong>Total discoveries stored:</strong> ${(data.all_records || []).length}</p>`;
+                infoBox.style.display = 'block';
+                infoBox.innerHTML = metaHtml;
+            } catch (error) {
+                console.error('New manufacturer discovery error:', error);
+                infoBox.style.display = 'block';
+                infoBox.innerHTML = `<p><strong>Error:</strong> ${error.message}</p>`;
+                tableContainer.innerHTML = '';
+            } finally {
+                updateNewManufacturersProgress(100, 'Done');
+                searchBtn.disabled = false;
+                searchBtn.innerHTML = '✨ Discover New Manufacturers';
+            }
+        }
+
+        function updateNewManufacturersProgress(percent, text) {
+            document.getElementById('newManufacturersProgressBar').style.width = percent + '%';
+            document.getElementById('newManufacturersProgressText').textContent = text;
+        }
+
+        function renderNewManufacturersResults(existingData, newData) {
+            const resultsDiv = document.getElementById('newManufacturersResults');
+            const tableContainer = document.getElementById('newManufacturersTableContainer');
+            resultsDiv.style.display = 'block';
+
+            let html = '';
+
+            if (existingData && existingData.length > 0) {
+                html += `
+                    <h4 style="margin-top: 15px; margin-bottom: 10px; color: #004d40;">Previously Discovered (${existingData.length})</h4>
+                    ${createManufacturerTableHtml(existingData)}
+                `;
+            } else {
+                html += `
+                    <h4 style="margin-top: 15px; margin-bottom: 10px; color: #004d40;">Previously Discovered</h4>
+                    <p class="info-box">No prior discoveries for this API and country.</p>
+                `;
+            }
+
+            if (newData && newData.length > 0) {
+                html += `
+                    <h4 style="margin-top: 25px; margin-bottom: 10px; color: #004d40;">New This Search (${newData.length})</h4>
+                    ${createManufacturerTableHtml(newData)}
+                `;
+            } else {
+                html += `
+                    <h4 style="margin-top: 25px; margin-bottom: 10px; color: #004d40;">New This Search</h4>
+                    <p class="info-box">No additional manufacturers were found.</p>
+                `;
+            }
+
+            tableContainer.innerHTML = html;
+        }
+
+        function createManufacturerTableHtml(data) {
+            if (!data || data.length === 0) return '<p>No data available.</p>';
+
+            const columns = [
+                { key: 'manufacturer', label: 'Manufacturer' },
+                { key: 'api_name', label: 'API' },
+                { key: 'country', label: 'Country' },
+                { key: 'usdmf', label: 'USDMF' },
+                { key: 'cep', label: 'CEP' },
+                { key: 'imported_at', label: 'Imported At' },
+                { key: 'source_name', label: 'Source' },
+                { key: 'source_url', label: 'Source URL' },
+            ];
+
+            let tableHtml = '<table class="results-table"><thead><tr>';
+            columns.forEach(col => (tableHtml += `<th>${col.label}</th>`));
+            tableHtml += '</tr></thead><tbody>';
+
             data.forEach(row => {
                 tableHtml += '<tr>';
                 columns.forEach(col => {
-                    const cellContent = row[col] || '';
-                    // Escape HTML to prevent XSS and handle special characters
-                    const safeContent = String(cellContent).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                    tableHtml += `<td>${safeContent}</td>`;
+                    let value = row[col.key] || '';
+                    if (col.key === 'source_url' && value) {
+                        const safeUrl = value.replace(/"/g, '&quot;');
+                        value = `<a href="${safeUrl}" target="_blank" rel="noopener">Link</a>`;
+                    } else {
+                        value = value.toString()
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;');
+                    }
+                    tableHtml += `<td>${value}</td>`;
                 });
                 tableHtml += '</tr>';
             });
-            tableHtml += '</tbody>';
-            tableHtml += '</table>';
 
-            tableContainer.innerHTML = tableHtml;
-
-            // Show info
-            infoBox.style.display = 'block';
-            infoBox.className = 'info-box';
-            infoBox.style.borderLeftColor = '#4a9eff';
-            infoBox.style.backgroundColor = '#f0f4f8';
-            infoBox.innerHTML = `<p><strong>✅ Loaded ${data.length} records</strong> from Excel file.</p>`;
+            tableHtml += '</tbody></table>';
+            return tableHtml;
         }
 
-        function resetManufacturersUI() {
-            const progressSection = document.getElementById('manufacturersProgressSection');
+        function resetNewManufacturersUI(clearInputs = false) {
+            const progressSection = document.getElementById('newManufacturersProgressSection');
+            const tableContainer = document.getElementById('newManufacturersTableContainer');
+            const infoBox = document.getElementById('newManufacturersInfo');
+
             progressSection.style.display = 'none';
+            tableContainer.innerHTML = '';
+            infoBox.style.display = 'none';
+            infoBox.innerHTML = '';
+
+            if (clearInputs) {
+                document.getElementById('newApiManufacturerName').value = '';
+                document.getElementById('newApiManufacturerCountry').value = '';
+            }
         }
     </script>
 </body>

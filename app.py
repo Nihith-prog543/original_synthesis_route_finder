@@ -9,18 +9,21 @@ from queue import Queue
 import uuid
 import time
 import socket
-import pandas as pd
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Ensure required environment variables are provided via .env or hosting platform secrets.
 
 # Add the synthesis engine to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'synthesis_engine'))
 
 from synthesis_engine.analysis import SynthesisAnalyzer
 from synthesis_engine.utils import initialize_session, get_session_data, update_session_data
-from synthesis_engine.api_buyer_finder import ApiBuyerFinder # Import the new API Buyer Finder
+from synthesis_engine.api_buyer_finder import ApiBuyerFinder  # Import the new API Buyer Finder
+from synthesis_engine.api_manufacturer_service import ApiManufacturerService
+from synthesis_engine.api_manufacturer_discovery import ApiManufacturerDiscoveryService
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Change this to a secure secret key
@@ -28,6 +31,10 @@ app.secret_key = 'your-secret-key-here'  # Change this to a secure secret key
 # Global analyzer instance
 analyzer = None
 api_buyer_finder = None # Global instance for API Buyer Finder
+api_manufacturer_service = None
+api_manufacturer_discovery = None
+new_manufacturer_service = None
+new_manufacturer_discovery = None
 
 # Dictionary to store threading.Event objects for stopping analysis processes
 stop_events = {}
@@ -38,6 +45,15 @@ progress_queues = {}
 with app.app_context():
     analyzer = SynthesisAnalyzer()
     api_buyer_finder = ApiBuyerFinder() # Initialize ApiBuyerFinder
+    api_manufacturer_service = ApiManufacturerService()
+    api_manufacturer_discovery = ApiManufacturerDiscoveryService(api_manufacturer_service)
+    
+    new_db_path = os.environ.get(
+        "NEW_SQLITE_DB_FILENAME",
+        os.path.join(os.path.dirname(__file__), "new_manufacturers.db")
+    )
+    new_manufacturer_service = ApiManufacturerService(db_filename=new_db_path)
+    new_manufacturer_discovery = ApiManufacturerDiscoveryService(new_manufacturer_service)
 
 @app.route('/')
 def index():
@@ -359,84 +375,63 @@ def find_buyers():
         print(f"[DEBUG] Error in find_buyers endpoint: {e}")
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
 
-@app.route('/api/load_manufacturers', methods=['GET'])
-def load_manufacturers():
-    """Endpoint to load API manufacturers data from Excel file."""
+@app.route('/api/find_manufacturers', methods=['POST'])
+def find_manufacturers():
+    """Search API manufacturers stored in the legacy Excel-backed SQLite database."""
     try:
-        # Look for Excel file in the project root directory and parent directory
-        project_root = os.path.dirname(os.path.abspath(__file__))
-        parent_dir = os.path.dirname(project_root)  # DOM folder
-        
-        # Try different file names and extensions in both locations
-        possible_files = [
-            # Check parent directory (DOM folder) first - user's file location
-            os.path.join(parent_dir, 'API_Manufacturers_List.csv'),  # User's file with capitals
-            os.path.join(parent_dir, 'api_manufacturers_list.csv'),
-            os.path.join(parent_dir, 'api_manufacturers.xlsx'),
-            os.path.join(parent_dir, 'api_manufacturers.xls'),
-            os.path.join(parent_dir, 'api_manufacturers.csv'),
-            # Check project root directory
-            os.path.join(project_root, 'API_Manufacturers_List.csv'),  # With capitals
-            os.path.join(project_root, 'api_manufacturers_list.csv'),
-            os.path.join(project_root, 'api_manufacturers.xlsx'),
-            os.path.join(project_root, 'api_manufacturers.xls'),
-            os.path.join(project_root, 'api_manufacturers.csv'),
-            os.path.join(project_root, 'manufacturers.xlsx'),
-            os.path.join(project_root, 'manufacturers.xls'),
-            os.path.join(project_root, 'manufacturers.csv'),
-        ]
-        
-        excel_file = None
-        for file_path in possible_files:
-            if os.path.exists(file_path):
-                excel_file = file_path
-                break
-        
-        if not excel_file:
-            return jsonify({
-                'success': False,
-                'error': f'Excel file not found. Please place your Excel file in either:\n1. DOM folder: {parent_dir}\n2. Project folder: {project_root}\n\nSupported names: API_Manufacturers_List.csv, api_manufacturers_list.csv, api_manufacturers.xlsx, api_manufacturers.xls, api_manufacturers.csv, manufacturers.xlsx, manufacturers.xls, or manufacturers.csv'
-            }), 404
-        
-        # Read the Excel file
-        try:
-            if excel_file.endswith('.csv'):
-                df = pd.read_csv(excel_file)
-            else:
-                df = pd.read_excel(excel_file)
-        except Exception as e:
-            return jsonify({
-                'success': False,
-                'error': f'Error reading Excel file: {str(e)}'
-            }), 500
-        
-        if df.empty:
-            return jsonify({
-                'success': False,
-                'error': 'Excel file is empty or could not be read.'
-            }), 400
-        
-        # Convert DataFrame to dictionary format for JSON response
-        # Replace NaN values with empty strings
-        df = df.fillna('')
-        
-        # Get column names
-        columns = df.columns.tolist()
-        
-        # Convert to list of dictionaries
-        data = df.to_dict(orient='records')
-        
+        data = request.get_json()
+        api_name = data.get('api_name', '').strip()
+        country = data.get('country', '').strip()
+
+        if not api_name or not country:
+            return jsonify({'success': False, 'error': 'API name and country are required'}), 400
+
+        if api_manufacturer_service is None:
+            return jsonify({'success': False, 'error': 'Manufacturer service not initialized'}), 500
+
+        records = api_manufacturer_service.query(api_name, country)
         return jsonify({
             'success': True,
-            'data': data,
-            'columns': columns,
-            'row_count': len(data),
-            'file_path': excel_file
+            'records': records,
+            'requested_api': api_name,
+            'requested_country': country
         })
-        
     except Exception as e:
-        print(f"[DEBUG] Error in load_manufacturers endpoint: {e}")
+        print(f"[DEBUG] Error in find_manufacturers endpoint: {e}")
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/api/discover_manufacturers', methods=['POST'])
+def discover_manufacturers():
+    """Run Google discovery and persist new manufacturers into the discovery database."""
+    try:
+        data = request.get_json()
+        api_name = data.get('api_name', '').strip()
+        country = data.get('country', '').strip()
+
+        if not api_name or not country:
+            return jsonify({'success': False, 'error': 'API name and country are required'}), 400
+
+        if new_manufacturer_service is None or new_manufacturer_discovery is None:
+            return jsonify({'success': False, 'error': 'Discovery service not initialized'}), 500
+
+        discovery_result = new_manufacturer_discovery.discover(api_name, country)
+        if not discovery_result.get('success', False):
+            return jsonify({'success': False, 'error': discovery_result.get('error', 'Discovery failed')}), 500
+
+        return jsonify({
+            'success': True,
+            'existing_records': discovery_result.get('existing_records', []),
+            'new_records': discovery_result.get('new_records', []),
+            'all_records': discovery_result.get('all_records', []),
+            'inserted_count': discovery_result.get('inserted_count', 0),
+            'requested_api': api_name,
+            'requested_country': country
+        })
+    except Exception as e:
+        print(f"[DEBUG] Error in find_manufacturers endpoint: {e}")
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
 
 
 if __name__ == '__main__':
