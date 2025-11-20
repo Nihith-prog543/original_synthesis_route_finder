@@ -15,7 +15,7 @@ ENV/
 *.db-shm
 *.sqlite
 *.sqlite3
-viruj_local.db
+!viruj_local.db
 
 # Environment variables
 .env
