@@ -58,8 +58,16 @@ class ApiBuyerFinder:
         self.GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
         self.GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "1475eceacf9eb4d06")
 
-        self.client = OpenAI(api_key=self.OPENAI_API_KEY)
-        self.groq_client = Groq(api_key=self.GROQ_API_KEY)
+        self.client = None
+        if self.OPENAI_API_KEY:
+            try:
+                self.client = OpenAI(api_key=self.OPENAI_API_KEY)
+            except Exception as exc:
+                logger.warning(f"⚠️ Failed to initialize OpenAI client: {exc}")
+        else:
+            logger.info("ℹ️ OPENAI_API_KEY not set; OpenAI agent will be skipped.")
+
+        self.groq_client = Groq(api_key=self.GROQ_API_KEY) if self.GROQ_API_KEY else None
 
         self.TRUSTED_SOURCES = [
             "1mg.com", "netmeds.com", "apollo247.com", "drugs.com", "goodrx.com", "fda.gov",
@@ -618,6 +626,10 @@ Find companies in {country} that manufacture tablets, capsules or other finished
             return pd.DataFrame()
 
     def run_agent_openai(self, api: str, country: str, existing_companies: list) -> pd.DataFrame:
+        if not self.client:
+            logger.info("ℹ️ Skipping OpenAI agent (client not configured).")
+            return pd.DataFrame()
+
         logger.info(f"🤖 Running OpenAI agent for {api} in {country}...")
         
         system_prompt = f"""You are a pharmaceutical manufacturing expert specializing in identifying companies that manufacture FINISHED DOSAGE FORMS containing specific APIs. 
@@ -801,6 +813,10 @@ Search Results:
             return pd.DataFrame()
 
     def run_agent_groq(self, api: str, country: str, existing_companies: list) -> pd.DataFrame:
+        if not self.groq_client:
+            logger.info("ℹ️ Skipping Groq agent (client not configured).")
+            return pd.DataFrame()
+
         logger.info(f"🤖 Running Groq agent for {api} in {country}...")
         
         system_prompt = f"""You are a pharmaceutical research assistant. Your task is to find companies that manufacture finished dosage forms.
