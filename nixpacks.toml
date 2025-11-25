@@ -1,0 +1,10 @@
+++ b/synthesis_route_finder/nixpacks.toml
+[phases.setup]
+nixPkgs = [
+  "xorg.libXrender",
+  "xorg.libXext",
+  "xorg.libSM",
+  "xorg.libXt",
+  "xorg.libICE"
+]
+
