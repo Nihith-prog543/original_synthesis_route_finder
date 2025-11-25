@@ -17,10 +17,16 @@ import pandas as pd
 from urllib.parse import urljoin
 import base64
 from googleapiclient.discovery import build
-from rdkit import Chem
-from rdkit.Chem.Draw import rdMolDraw2D
-from rdkit.Chem import AllChem
-from rdkit.Chem import Draw
+try:
+    from rdkit import Chem
+    from rdkit.Chem.Draw import rdMolDraw2D
+    from rdkit.Chem import AllChem
+    from rdkit.Chem import Draw
+    RDKit_AVAILABLE = True
+except ImportError:
+    Chem = AllChem = Draw = None
+    rdMolDraw2D = None
+    RDKit_AVAILABLE = False
 import pubchempy as pcp
 import dataclasses
 
@@ -885,6 +891,9 @@ RELEVANT CLAIMS:
             return []
 
     def _generate_reaction_image(self, reaction_smiles):
+        if not RDKit_AVAILABLE:
+            print("[DEBUG] RDKit not available; skipping reaction image generation.")
+            return None
         try:
             # Attempt to parse as a reaction SMARTS first
             if '>>' in reaction_smiles:
