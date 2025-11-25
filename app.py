@@ -10,6 +10,8 @@ import uuid
 import time
 import socket
 from dotenv import load_dotenv
+import pandas as pd
+import io
 
 # Load environment variables from .env file
 load_dotenv()
@@ -412,10 +414,11 @@ def discover_manufacturers():
         if not api_name or not country:
             return jsonify({'success': False, 'error': 'API name and country are required'}), 400
 
-        if new_manufacturer_service is None or new_manufacturer_discovery is None:
+        # Use the main manufacturer service (same database as CSV import) instead of new_manufacturer_service
+        if api_manufacturer_service is None or api_manufacturer_discovery is None:
             return jsonify({'success': False, 'error': 'Discovery service not initialized'}), 500
 
-        discovery_result = new_manufacturer_discovery.discover(api_name, country)
+        discovery_result = api_manufacturer_discovery.discover(api_name, country)
         if not discovery_result.get('success', False):
             return jsonify({'success': False, 'error': discovery_result.get('error', 'Discovery failed')}), 500
 
@@ -430,6 +433,175 @@ def discover_manufacturers():
         })
     except Exception as e:
         print(f"[DEBUG] Error in find_manufacturers endpoint: {e}")
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+@app.route('/api/download_buyers', methods=['POST'])
+def download_buyers():
+    """Download API buyers data as CSV or Excel - includes ALL entries from database"""
+    try:
+        data = request.get_json()
+        api_name = data.get('api_name', '').strip()
+        country = data.get('country', '').strip()
+        format_type = data.get('format', 'csv').lower()  # 'csv' or 'excel'
+        
+        if not api_name or not country:
+            return jsonify({'success': False, 'error': 'API name and country are required'}), 400
+        
+        if api_buyer_finder is None:
+            return jsonify({'success': False, 'error': 'ApiBuyerFinder not initialized'}), 500
+        
+        # Fetch ALL data directly from database (existing + newly added)
+        engine = api_buyer_finder.get_db_engine()
+        if not engine:
+            return jsonify({'success': False, 'error': 'Database connection failed'}), 500
+        
+        from sqlalchemy import text
+        query = text("""
+            SELECT company, form, strength, additional_info, url, verification_source, 
+                   confidence, api, country, created_at, updated_at
+            FROM viruj 
+            WHERE api = :api AND country = :country
+            ORDER BY created_at DESC
+        """)
+        
+        with engine.begin() as conn:
+            result = conn.execute(query, {"api": api_name, "country": country})
+            rows = result.fetchall()
+        
+        if not rows:
+            return jsonify({'success': False, 'error': 'No data found in database'}), 400
+        
+        # Create DataFrame with all columns
+        df = pd.DataFrame(rows, columns=[
+            'Company', 'Form', 'Strength', 'Additional Info', 'URL', 
+            'Verification Source', 'Confidence', 'API', 'Country', 
+            'Created At', 'Updated At'
+        ])
+        
+        # Prepare filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_api = "".join(c for c in api_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_country = "".join(c for c in country if c.isalnum() or c in (' ', '-', '_')).strip()
+        filename = f"API_Buyers_{safe_api}_{safe_country}_{timestamp}"
+        
+        if format_type == 'excel':
+            # Create Excel file in memory
+            try:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='API Buyers')
+                output.seek(0)
+                excel_data = output.getvalue()
+                
+                if len(excel_data) == 0:
+                    return jsonify({'success': False, 'error': 'Generated Excel file is empty'}), 500
+                
+                return Response(
+                    excel_data,
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{filename}.xlsx"',
+                        'Content-Length': str(len(excel_data))
+                    }
+                )
+            except Exception as e:
+                print(f"[DEBUG] Excel generation error: {e}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({'success': False, 'error': f'Excel generation failed: {str(e)}'}), 500
+        else:
+            # Create CSV file in memory
+            output = io.StringIO()
+            df.to_csv(output, index=False)
+            output.seek(0)
+            
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{filename}.csv"'
+                }
+            )
+            
+    except Exception as e:
+        print(f"[DEBUG] Error in download_buyers endpoint: {e}")
+        return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
+
+@app.route('/api/download_manufacturers', methods=['POST'])
+def download_manufacturers():
+    """Download API manufacturers data as CSV or Excel - includes ALL entries from database"""
+    try:
+        data = request.get_json()
+        api_name = data.get('api_name', '').strip()
+        country = data.get('country', '').strip()
+        format_type = data.get('format', 'csv').lower()  # 'csv' or 'excel'
+        
+        if not api_name or not country:
+            return jsonify({'success': False, 'error': 'API name and country are required'}), 400
+        
+        if api_manufacturer_service is None:
+            return jsonify({'success': False, 'error': 'Manufacturer service not initialized'}), 500
+        
+        # Get ALL records directly from database (includes existing + newly discovered)
+        records = api_manufacturer_service.query(api_name, country)
+        
+        if not records:
+            return jsonify({'success': False, 'error': 'No data found in database'}), 400
+        
+        # Create DataFrame
+        df = pd.DataFrame(records)
+        
+        # Reorder columns for better readability
+        column_order = ['api_name', 'manufacturer', 'country', 'usdmf', 'cep', 'source_name', 'source_url', 'source_file', 'imported_at']
+        df = df[[col for col in column_order if col in df.columns]]
+        
+        # Prepare filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_api = "".join(c for c in api_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_country = "".join(c for c in country if c.isalnum() or c in (' ', '-', '_')).strip()
+        filename = f"API_Manufacturers_{safe_api}_{safe_country}_{timestamp}"
+        
+        if format_type == 'excel':
+            # Create Excel file in memory
+            try:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='API Manufacturers')
+                output.seek(0)
+                excel_data = output.getvalue()
+                
+                if len(excel_data) == 0:
+                    return jsonify({'success': False, 'error': 'Generated Excel file is empty'}), 500
+                
+                return Response(
+                    excel_data,
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{filename}.xlsx"',
+                        'Content-Length': str(len(excel_data))
+                    }
+                )
+            except Exception as e:
+                print(f"[DEBUG] Excel generation error: {e}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({'success': False, 'error': f'Excel generation failed: {str(e)}'}), 500
+        else:
+            # Create CSV file in memory
+            output = io.StringIO()
+            df.to_csv(output, index=False)
+            output.seek(0)
+            
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{filename}.csv"'
+                }
+            )
+            
+    except Exception as e:
+        print(f"[DEBUG] Error in download_manufacturers endpoint: {e}")
         return jsonify({'success': False, 'error': f'Server error: {str(e)}'}), 500
 
 

@@ -13,19 +13,39 @@ class ApiManufacturerService:
     """
 
     def __init__(self, db_filename: str | None = None, table_name: str = "API_manufacturers"):
-        self.db_path = self._determine_db_path(db_filename)
-        self.engine = create_engine(
-            f"sqlite:///{self.db_path}",
-            connect_args={"check_same_thread": False, "timeout": 60},
-            echo=False,
-            pool_pre_ping=True,
-        )
         self.table_name = table_name
-        self._enable_wal_mode()
+        self.db_path = None
+        self.is_postgresql = False
+        
+        # Priority 1: Check for PostgreSQL connection (Supabase/cloud)
+        database_url = os.getenv("DATABASE_URL")
+        if database_url and database_url.startswith("postgresql://"):
+            self.is_postgresql = True
+            self.engine = create_engine(
+                database_url,
+                pool_size=5,
+                max_overflow=10,
+                pool_recycle=3600,
+                echo=False,
+                pool_pre_ping=True,
+            )
+        else:
+            # Priority 2: Fallback to SQLite (local development)
+            self.db_path = self._determine_db_path(db_filename)
+            self.engine = create_engine(
+                f"sqlite:///{self.db_path}",
+                connect_args={"check_same_thread": False, "timeout": 60},
+                echo=False,
+                pool_pre_ping=True,
+            )
+            self._enable_wal_mode()
+        
         self._ensure_table()
     
     def _enable_wal_mode(self):
-        """Enable WAL mode for better concurrency"""
+        """Enable WAL mode for better concurrency (SQLite only)"""
+        if self.is_postgresql:
+            return  # WAL mode is SQLite-specific
         try:
             with self.engine.begin() as conn:
                 conn.execute(text("PRAGMA journal_mode=WAL;"))
@@ -48,42 +68,91 @@ class ApiManufacturerService:
         else:
             current_file_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(current_file_dir)
-            preferred_project_db = os.path.join(project_root, "viruj_local.db")
+            
+            # Priority 1: Check the manufactures_api location (same as ApiBuyerFinder)
             manufactures_api_path = r"C:\Users\HP\Desktop\manufactures_api\viruj_local.db"
-
-            if os.path.exists(preferred_project_db):
-                db_filename = preferred_project_db
-            elif os.path.exists(manufactures_api_path):
+            if os.path.exists(manufactures_api_path):
                 db_filename = manufactures_api_path
             else:
-                db_filename = preferred_project_db  # default location even if it doesn't exist yet
+                # Priority 2: Look in project root
+                preferred_project_db = os.path.join(project_root, "viruj_local.db")
+                if os.path.exists(preferred_project_db):
+                    db_filename = preferred_project_db
+                else:
+                    # Default to manufactures_api location
+                    db_filename = manufactures_api_path
 
         os.makedirs(os.path.dirname(db_filename), exist_ok=True)
         return db_filename
 
     def _ensure_table(self):
-        create_sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.table_name} (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            api_name TEXT NOT NULL,
-            manufacturer TEXT NOT NULL,
-            country TEXT,
-            usdmf TEXT,
-            cep TEXT,
-            source_file TEXT,
-            imported_at TEXT,
-            source_url TEXT,
-            source_name TEXT,
-            UNIQUE(api_name, manufacturer, country)
-        );
-        """
+        """Create table with appropriate syntax for PostgreSQL or SQLite"""
+        if self.is_postgresql:
+            # PostgreSQL syntax
+            create_sql = f"""
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
+                id SERIAL PRIMARY KEY,
+                api_name TEXT NOT NULL,
+                manufacturer TEXT NOT NULL,
+                country TEXT,
+                usdmf TEXT,
+                cep TEXT,
+                source_file TEXT,
+                imported_at TEXT,
+                source_url TEXT,
+                source_name TEXT,
+                UNIQUE(api_name, manufacturer, country)
+            );
+            """
+        else:
+            # SQLite syntax
+            create_sql = f"""
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                api_name TEXT NOT NULL,
+                manufacturer TEXT NOT NULL,
+                country TEXT,
+                usdmf TEXT,
+                cep TEXT,
+                source_file TEXT,
+                imported_at TEXT,
+                source_url TEXT,
+                source_name TEXT,
+                UNIQUE(api_name, manufacturer, country)
+            );
+            """
+        
         with self.engine.begin() as conn:
             conn.execute(text(create_sql))
-            columns = [row[1] for row in conn.execute(text(f"PRAGMA table_info({self.table_name})"))]
-            if "source_url" not in columns:
-                conn.execute(text(f"ALTER TABLE {self.table_name} ADD COLUMN source_url TEXT"))
-            if "source_name" not in columns:
-                conn.execute(text(f"ALTER TABLE {self.table_name} ADD COLUMN source_name TEXT"))
+
+            # Check and add missing columns
+            if self.is_postgresql:
+                # PostgreSQL: Check columns using information_schema (case-insensitive)
+                table_name_lower = self.table_name.lower()
+                columns_query = text(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND lower(table_name) = :table_name
+                    """
+                )
+                existing_columns = {
+                    row[0].lower()
+                    for row in conn.execute(columns_query, {"table_name": table_name_lower})
+                }
+
+                if "source_url" not in existing_columns:
+                    conn.execute(text(f"ALTER TABLE {self.table_name} ADD COLUMN source_url TEXT"))
+                if "source_name" not in existing_columns:
+                    conn.execute(text(f"ALTER TABLE {self.table_name} ADD COLUMN source_name TEXT"))
+            else:
+                # SQLite: Use PRAGMA
+                columns = [row[1] for row in conn.execute(text(f"PRAGMA table_info({self.table_name})"))]
+                if "source_url" not in columns:
+                    conn.execute(text(f"ALTER TABLE {self.table_name} ADD COLUMN source_url TEXT"))
+                if "source_name" not in columns:
+                    conn.execute(text(f"ALTER TABLE {self.table_name} ADD COLUMN source_name TEXT"))
 
     # ---------- Excel Synchronization ----------
 
@@ -216,13 +285,24 @@ class ApiManufacturerService:
         if df.empty:
             return 0, []
 
-        insert_sql = text(
-            f"""
-            INSERT OR IGNORE INTO {self.table_name}
-            (api_name, manufacturer, country, usdmf, cep, source_file, imported_at, source_url, source_name)
-            VALUES (:api_name, :manufacturer, :country, :usdmf, :cep, :source_file, :imported_at, :source_url, :source_name);
-            """
-        )
+        # Use PostgreSQL-compatible syntax if using PostgreSQL, otherwise SQLite
+        if self.is_postgresql:
+            insert_sql = text(
+                f"""
+                INSERT INTO {self.table_name}
+                (api_name, manufacturer, country, usdmf, cep, source_file, imported_at, source_url, source_name)
+                VALUES (:api_name, :manufacturer, :country, :usdmf, :cep, :source_file, :imported_at, :source_url, :source_name)
+                ON CONFLICT (api_name, manufacturer, country) DO NOTHING;
+                """
+            )
+        else:
+            insert_sql = text(
+                f"""
+                INSERT OR IGNORE INTO {self.table_name}
+                (api_name, manufacturer, country, usdmf, cep, source_file, imported_at, source_url, source_name)
+                VALUES (:api_name, :manufacturer, :country, :usdmf, :cep, :source_file, :imported_at, :source_url, :source_name);
+                """
+            )
 
         rows_to_insert = [
             {
@@ -289,6 +369,11 @@ class ApiManufacturerService:
         # Exclude the first batch of hallucinated rows inserted during initial testing
         bad_import_timestamp = "2025-11-18T08:11:35.863619"
 
+        if self.is_postgresql:
+            order_clause = "ORDER BY LOWER(manufacturer)"
+        else:
+            order_clause = "ORDER BY manufacturer COLLATE NOCASE"
+
         query_sql = text(
             f"""
             SELECT api_name, manufacturer, country, usdmf, cep, imported_at, source_url, source_name
@@ -296,7 +381,7 @@ class ApiManufacturerService:
             WHERE LOWER(api_name) LIKE LOWER(:api_pattern)
               AND LOWER(country) LIKE LOWER(:country_pattern)
               AND (imported_at IS NULL OR imported_at = '' OR imported_at != :bad_ts)
-            ORDER BY manufacturer COLLATE NOCASE;
+            {order_clause};
             """
         )
 
