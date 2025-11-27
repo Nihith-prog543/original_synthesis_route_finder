@@ -21,7 +21,15 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Optional fallback
 # ======================================
 
 # Initialize clients
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+if OPENAI_API_KEY:
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+    except TypeError as exc:
+        logger.warning("OpenAI client initialization failed (%s). Continuing without OpenAI.", exc)
+        client = None
+else:
+    client = None
+
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 class ApiBuyerFinder:
