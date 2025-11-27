@@ -19,4 +19,3 @@ duckduckgo-search==6.1.1
 openai==1.51.0
 tenacity==8.4.2
 numpy==1.26.4
-phi==0.3.0
