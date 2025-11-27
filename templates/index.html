@@ -1973,7 +1973,7 @@
             resetNewManufacturersUI(false);
             progressSection.style.display = 'block';
             progressBar.style.width = '0%';
-            progressText.textContent = 'Searching trusted sources...';
+            progressText.textContent = 'Scanning pharma directories...';
             resultsDiv.style.display = 'none';
             tableContainer.innerHTML = '<p style="text-align: center; color: #666;">Analyzing results...</p>';
             infoBox.style.display = 'none';
@@ -1982,7 +1982,7 @@
             searchBtn.innerHTML = '<div class="spinner"></div> Discovering...';
 
             try {
-                updateNewManufacturersProgress(30, 'Querying Google Custom Search...');
+                updateNewManufacturersProgress(30, 'Collecting manufacturer intel...');
                 const response = await fetch('/api/discover_manufacturers', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
