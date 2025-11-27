@@ -1,0 +1,18 @@
+++ b/synthesis_route_finder/nixpacks.toml
+[phases.setup]
+aptPkgs = [
+  "libxrender1",
+  "libxext6",
+  "libsm6",
+  "libice6",
+  "libxt6",
+  "libglu1-mesa"
+]
+nixPkgs = [
+  "xorg.libXrender",
+  "xorg.libXext",
+  "xorg.libSM",
+  "xorg.libXt",
+  "xorg.libICE"
+]
+
